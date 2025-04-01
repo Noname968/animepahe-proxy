@@ -1,13 +1,6 @@
 import { Hono } from 'hono'
-import { v4 as uuidv4 } from 'uuid'
-import { LRUCache } from 'lru-cache'
 
 const app = new Hono()
-
-const cache = new LRUCache<string, { url: string, ref?: string }>({
-  ttl: 1000 * 60 * 60,
-  max: 5000,
-})
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -54,43 +47,31 @@ app.get('/', async (c) => {
 
     console.log('HLS stream found')
 
-    const regex = /\/[^\/]*$/
-    const urlRegex =
-      /^(?:(?:(?:https?|ftp):)?\/\/)[^\s/$.?#].[^\s]*$/i
+    const baseUrl = new URL(url)
+    const basePath = baseUrl.pathname.substring(0, baseUrl.pathname.lastIndexOf('/') + 1)
+    const baseUrlString = `${baseUrl.protocol}//${baseUrl.host}${basePath}`
+
     const m3u8AdjustedChunks = text.split('\n').map((line) => {
       const trimmed = line.trim()
 
       if (trimmed.startsWith('#EXT-X-KEY') && trimmed.includes('URI=')) {
         const match = trimmed.match(/URI="([^"]+)"/)
         if (match) {
-          const keyUri = new URL(match[1], url).href
-          const id = uuidv4()
-          cache.set(id, { url: keyUri, ref })
-          return trimmed.replace(/URI="([^"]+)"/, `URI="/key/${id}"`)
+          const keyUri = new URL(match[1], baseUrlString).href
+          return trimmed.replace(/URI="([^"]+)"/, `URI="/key?url=${encodeURIComponent(keyUri)}"`)
         }
       }
 
       if (!trimmed || trimmed.startsWith('#')) return line
 
-      let formattedLine = trimmed.startsWith('.')
-        ? trimmed.substring(1)
-        : trimmed
-
-      if (formattedLine.match(urlRegex)) {
-        const id = uuidv4()
-        cache.set(id, { url: formattedLine, ref })
-        return `/segment/${id}`
-      } else {
-        const newUrl = url.replace(
-          regex,
-          formattedLine.startsWith('/')
-            ? formattedLine
-            : `/${formattedLine}`
-        )
-        const id = uuidv4()
-        cache.set(id, { url: newUrl, ref })
-        return `/segment/${id}`
+      // Handle absolute URLs
+      if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
+        return `/segment?url=${encodeURIComponent(trimmed)}`
       }
+
+      // Handle relative URLs
+      const segmentUrl = new URL(trimmed, baseUrlString).href
+      return `/segment?url=${encodeURIComponent(segmentUrl)}`
     })
 
     return c.body(m3u8AdjustedChunks.join('\n'), 200, {
@@ -106,15 +87,12 @@ app.get('/', async (c) => {
   }
 })
 
-app.get('/segment/:id', async (c) => {
-  const { url, ref } = cache.get(c.req.param('id')) || {}
-  if (!url) return c.json({ error: 'Segment not found' }, 404)
+app.get('/segment', async (c) => {
+  const segmentUrl = c.req.query('url')
+  if (!segmentUrl) return c.json({ error: 'Segment URL not provided' }, 400)
 
   try {
-    const headers: HeadersInit = {}
-    if (ref) headers['Referer'] = ref
-
-    const resp = await fetch(url, { headers })
+    const resp = await fetch(segmentUrl)
     const buffer = await resp.arrayBuffer()
     const contentType = resp.headers.get('Content-Type') || 'application/octet-stream'
 
@@ -129,15 +107,12 @@ app.get('/segment/:id', async (c) => {
   }
 })
 
-app.get('/key/:id', async (c) => {
-  const { url, ref } = cache.get(c.req.param('id')) || {}
-  if (!url) return c.json({ error: 'Key not found' }, 404)
+app.get('/key', async (c) => {
+  const keyUrl = c.req.query('url')
+  if (!keyUrl) return c.json({ error: 'Key URL not provided' }, 400)
 
   try {
-    const headers: HeadersInit = {}
-    if (ref) headers['Referer'] = ref
-
-    const resp = await fetch(url, { headers })
+    const resp = await fetch(keyUrl)
     const buffer = await resp.arrayBuffer()
     const contentType = resp.headers.get('Content-Type') || 'application/octet-stream'
 
