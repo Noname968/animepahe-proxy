@@ -6,6 +6,7 @@ const app = new Hono()
 
 const cache = new LRUCache<string, { url: string, ref?: string }>({
   ttl: 1000 * 60 * 60,
+  max: 5000,
 })
 
 const corsHeaders = {
