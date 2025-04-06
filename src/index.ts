@@ -15,14 +15,15 @@ app.get('/health', (c) => c.text('OK'))
 app.get('/', async (c) => {
   const url = c.req.query('url')
   const ref = c.req.query('ref')
+  const userHeaders = c.req.header;
 
   if (!url) return c.json({ error: 'No URL provided' }, 400)
 
   try {
-    const headers: HeadersInit = {}
-    if (ref) headers['Referer'] = ref
 
-    const response = await fetch(url, { headers })
+    const response = await fetch(url, {
+      headers: { ...userHeaders, Referer: ref || '', ...corsHeaders },
+    });
     const contentType = response.headers.get('Content-Type') || ''
     const isM3U8 =
       contentType.includes('application/vnd.apple.mpegurl') ||
@@ -83,14 +84,15 @@ app.get('/', async (c) => {
 app.get('/proxy', async (c) => {
   const url = c.req.query('url')
   const ref = c.req.query('ref')
+  const userHeaders = c.req.header;
 
-  if (!url) return c.json({ error: 'No URL provided' }, 400)
+  if (!url) return c.json({ error: 'No URL provided' }, 400);
 
   try {
-    const headers: HeadersInit = {}
-    if (ref) headers['Referer'] = ref
+    const resp = await fetch(url, {
+      headers: { ...userHeaders, Referer: ref || '', ...corsHeaders },
+    });
 
-    const resp = await fetch(url, { headers })
     const buffer = await resp.arrayBuffer()
     const contentType = resp.headers.get('Content-Type') || 'application/octet-stream'
 
