@@ -92,17 +92,15 @@ app.get('/proxy', async (c) => {
 
     const resp = await fetch(url, { headers })
     const buffer = await resp.arrayBuffer()
-    const contentType = resp.headers.get('Content-Type') || 'application/octet-stream'
-
     return c.body(buffer, 200, {
       ...corsHeaders,
-      'Content-Type': contentType,
+      'Content-Type': 'application/ vnd.apple.mpegurl',
       'Cache-Control': 'public, max-age=31536000, immutable',
     })
   } catch (err) {
-    console.error('Error fetching resource:', err)
-    return c.json({ error: 'Error fetching resource', details: (err as Error).message }, 500)
-  }
+  console.error('Error fetching resource:', err)
+  return c.json({ error: 'Error fetching resource', details: (err as Error).message }, 500)
+}
 })
 
 export default app
