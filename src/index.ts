@@ -11,7 +11,7 @@ const app = new Hono()
 // Health check
 app.get('/health', (c) => c.text('OK'))
 
-// Main proxy endpoint
+// Main proxy for everything: .m3u8, .key, .ts
 app.get('/', async (c) => {
   const url = c.req.query('url')
   const ref = c.req.query('ref')
@@ -26,9 +26,10 @@ app.get('/', async (c) => {
     const contentType = response.headers.get('Content-Type') || ''
     const isM3U8 =
       contentType.includes('application/vnd.apple.mpegurl') ||
-      contentType.includes('application/x-mpegURL')
+      contentType.includes('application/x-mpegurl')
 
-    if (url.endsWith('.key') || !isM3U8) {
+    // If .key or .ts or anything else, return raw content
+    if (url.endsWith('.key') || url.endsWith('.ts') || !isM3U8) {
       const buffer = await response.arrayBuffer()
       return c.body(buffer, 200, {
         ...corsHeaders,
@@ -37,6 +38,7 @@ app.get('/', async (c) => {
       })
     }
 
+    // Process m3u8
     const text = await response.text()
     if (!text.startsWith('#EXTM3U')) {
       return c.body(text, response.status, {
@@ -45,25 +47,36 @@ app.get('/', async (c) => {
       })
     }
 
-    console.log('HLS stream found')
+    console.log('M3U8 playlist detected — rewriting key and segment URIs')
 
     const base = new URL(url)
     const lines = text.split('\n')
     const processedLines = lines.map((line) => {
       const trimmed = line.trim()
 
+      // Rewrite encryption key URIs
       if (trimmed.startsWith('#EXT-X-KEY') && trimmed.includes('URI=')) {
         const match = trimmed.match(/URI="([^"]+)"/)
         if (match) {
           const keyUri = new URL(match[1], base).href
-          return trimmed.replace(/URI="([^"]+)"/, `URI="/proxy?url=${encodeURIComponent(keyUri)}${ref ? `&ref=${encodeURIComponent(ref)}` : ''}"`)
+          const proxied = `/?url=${encodeURIComponent(keyUri)}${ref ? `&ref=${encodeURIComponent(ref)}` : ''}`
+          return trimmed.replace(/URI="([^"]+)"/, `URI="${proxied}"`)
         }
       }
 
-      if (!trimmed || trimmed.startsWith('#')) return line
+      // Rewrite segment URIs (skip comment lines and empty lines)
+      if (!trimmed.startsWith('#') && trimmed !== '') {
+        try {
+          const segmentUri = new URL(trimmed, base).href
+          const proxied = `?url=${encodeURIComponent(segmentUri)}${ref ? `&ref=${encodeURIComponent(ref)}` : ''}`
+          return proxied
+        } catch (e) {
+          // If URL parsing fails, return original line
+          return line
+        }
+      }
 
-      const fullUrl = new URL(trimmed, base).href
-      return `/proxy?url=${encodeURIComponent(fullUrl)}${ref ? `&ref=${encodeURIComponent(ref)}` : ''}`
+      return line
     })
 
     return c.body(processedLines.join('\n'), 200, {
@@ -71,36 +84,9 @@ app.get('/', async (c) => {
       'Content-Type': 'application/vnd.apple.mpegurl',
     })
   } catch (err) {
-    console.error('Error in root handler:', err)
-    return c.json(
-      { error: 'Failed to fetch M3U8 content', details: (err as Error).message },
-      500
-    )
+    console.error('Proxy error:', err)
+    return c.json({ error: 'Failed to fetch content', details: (err as Error).message }, 500)
   }
-})
-
-// General proxy for keys/segments
-app.get('/proxy', async (c) => {
-  const url = c.req.query('url')
-  const ref = c.req.query('ref')
-
-  if (!url) return c.json({ error: 'No URL provided' }, 400)
-
-  try {
-    const headers: HeadersInit = {}
-    if (ref) headers['Referer'] = ref
-
-    const resp = await fetch(url, { headers })
-    const buffer = await resp.arrayBuffer()
-    return c.body(buffer, 200, {
-      ...corsHeaders,
-      'Content-Type': 'application/ vnd.apple.mpegurl',
-      'Cache-Control': 'public, max-age=31536000, immutable',
-    })
-  } catch (err) {
-  console.error('Error fetching resource:', err)
-  return c.json({ error: 'Error fetching resource', details: (err as Error).message }, 500)
-}
 })
 
 export default app
