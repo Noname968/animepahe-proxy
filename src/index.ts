@@ -63,7 +63,7 @@ app.get('/', async (c) => {
       if (!trimmed || trimmed.startsWith('#')) return line
 
       const fullUrl = new URL(trimmed, base).href
-      return `http://localhost:3000/proxy?url=${encodeURIComponent(fullUrl)}${ref ? `&ref=${encodeURIComponent(ref)}` : ''}`
+      return `/proxy?url=${encodeURIComponent(fullUrl)}${ref ? `&ref=${encodeURIComponent(ref)}` : ''}`
     })
 
     return c.body(processedLines.join('\n'), 200, {
