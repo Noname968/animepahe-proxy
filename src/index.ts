@@ -2,9 +2,10 @@ import { Hono } from 'hono'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'GET,HEAD,OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type',
-}
+  'Access-Control-Allow-Methods': '*',
+  'Access-Control-Allow-Headers': '*',
+  'Access-Control-Expose-Headers': '*',
+};
 
 const app = new Hono()
 
@@ -24,7 +25,7 @@ app.get('/', async (c) => {
     const response = await fetch(url, {
       headers: { ...userHeaders, Referer: ref || '', ...corsHeaders },
     });
-    const contentType = response.headers.get('Content-Type') || ''
+    let contentType = response.headers.get('Content-Type') || 'text/plain';
     const isM3U8 =
       contentType.includes('application/vnd.apple.mpegurl') ||
       contentType.includes('application/x-mpegURL')
@@ -33,7 +34,7 @@ app.get('/', async (c) => {
       const buffer = await response.arrayBuffer()
       return c.body(buffer, 200, {
         ...corsHeaders,
-        'Content-Type': contentType || 'application/octet-stream',
+        'Content-Type': 'video/mp2t',
         'Cache-Control': 'public, max-age=31536000, immutable',
       })
     }
@@ -42,7 +43,6 @@ app.get('/', async (c) => {
     if (!text.startsWith('#EXTM3U')) {
       return c.body(text, response.status, {
         ...corsHeaders,
-        'Content-Type': contentType || 'text/plain',
       })
     }
 
@@ -69,7 +69,7 @@ app.get('/', async (c) => {
 
     return c.body(processedLines.join('\n'), 200, {
       ...corsHeaders,
-      'Content-Type': 'application/vnd.apple.mpegurl',
+      'Content-Type': 'video/mp2t',
     })
   } catch (err) {
     console.error('Error in root handler:', err)
@@ -94,11 +94,11 @@ app.get('/proxy', async (c) => {
     });
 
     const buffer = await resp.arrayBuffer()
-    const contentType = resp.headers.get('Content-Type') || 'application/octet-stream'
+    let contentType = resp.headers.get('Content-Type') || 'text/plain';
 
     return c.body(buffer, 200, {
       ...corsHeaders,
-      'Content-Type': contentType,
+      'Content-Type': 'video/mp2t',
       'Cache-Control': 'public, max-age=31536000, immutable',
     })
   } catch (err) {
