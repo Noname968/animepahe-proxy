@@ -1,109 +1,115 @@
 import { Hono } from 'hono'
+import axios from 'axios'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': '*',
   'Access-Control-Allow-Headers': '*',
   'Access-Control-Expose-Headers': '*',
-};
+}
 
 const app = new Hono()
 
-// Health check
 app.get('/health', (c) => c.text('OK'))
 
-// Main proxy endpoint
+// Proxy endpoint for M3U8 and .key files
 app.get('/', async (c) => {
   const url = c.req.query('url')
   const ref = c.req.query('ref')
-  const userHeaders = c.req.header;
 
   if (!url) return c.json({ error: 'No URL provided' }, 400)
 
   try {
+    const response = await axios.get(url, {
+      headers: { Referer: ref || '' },
+      responseType: 'arraybuffer',
+    })
 
-    const response = await fetch(url, {
-      headers: { ...userHeaders, Referer: ref || '', ...corsHeaders },
-    });
-    let contentType = response.headers.get('Content-Type') || 'text/plain';
-    const isM3U8 =
-      contentType.includes('application/vnd.apple.mpegurl') ||
-      contentType.includes('application/x-mpegURL')
+    const contentType = response.headers['content-type'] || 'text/plain'
+    const isM3U8 = contentType.includes('application/vnd.apple.mpegurl') || contentType.includes('application/x-mpegURL')
 
+    // Serve .key or other media directly
     if (url.endsWith('.key') || !isM3U8) {
-      const buffer = await response.arrayBuffer()
-      return c.body(buffer, 200, {
+      return c.body(response.data, 200, {
         ...corsHeaders,
-        'Content-Type': 'video/mp2t',
+        'Content-Type': contentType,
         'Cache-Control': 'public, max-age=31536000, immutable',
       })
     }
 
-    const text = await response.text()
-    if (!text.startsWith('#EXTM3U')) {
-      return c.body(text, response.status, {
+    const playlistText = Buffer.from(response.data).toString('utf-8')
+    if (!playlistText.startsWith('#EXTM3U')) {
+      return c.body(playlistText, 200, {
         ...corsHeaders,
+        'Content-Type': contentType,
       })
     }
 
-    console.log('HLS stream found')
+    console.log('HLS playlist detected')
 
     const base = new URL(url)
-    const lines = text.split('\n')
+    const lines = playlistText.split('\n')
+
     const processedLines = lines.map((line) => {
       const trimmed = line.trim()
 
-      if (trimmed.startsWith('#EXT-X-KEY') && trimmed.includes('URI=')) {
+      // Rewrite key URI
+      if (trimmed.startsWith('#EXT-X-KEY') && trimmed.includes('URI="')) {
         const match = trimmed.match(/URI="([^"]+)"/)
         if (match) {
-          const keyUri = new URL(match[1], base).href
-          return trimmed.replace(/URI="([^"]+)"/, `URI="/proxy?url=${encodeURIComponent(keyUri)}${ref ? `&ref=${encodeURIComponent(ref)}` : ''}"`)
+          const absoluteKeyUrl = new URL(match[1], base).href
+          const proxyUrl = `/proxy?url=${encodeURIComponent(absoluteKeyUrl)}${ref ? `&ref=${encodeURIComponent(ref)}` : ''}`
+          return trimmed.replace(/URI="([^"]+)"/, `URI="${proxyUrl}"`)
         }
       }
 
+      // Skip comments or empty lines
       if (!trimmed || trimmed.startsWith('#')) return line
 
-      const fullUrl = new URL(trimmed, base).href
-      return `/proxy?url=${encodeURIComponent(fullUrl)}${ref ? `&ref=${encodeURIComponent(ref)}` : ''}`
+      // Rewrite segment URLs
+      const absoluteSegmentUrl = new URL(trimmed, base).href
+      return `/proxy?url=${encodeURIComponent(absoluteSegmentUrl)}${ref ? `&ref=${encodeURIComponent(ref)}` : ''}`
     })
 
     return c.body(processedLines.join('\n'), 200, {
       ...corsHeaders,
-      'Content-Type': 'video/mp2t',
+      'Content-Type': 'application/vnd.apple.mpegurl',
     })
   } catch (err) {
-    console.error('Error in root handler:', err)
-    return c.json(
-      { error: 'Failed to fetch M3U8 content', details: (err as Error).message },
-      500
-    )
+    console.error('Error in main handler:', err)
+    return c.json({
+      error: 'Failed to fetch or process M3U8 content',
+      details: err instanceof Error ? err.message : String(err),
+    }, 500)
   }
 })
 
-// General proxy for keys/segments
+// General-purpose proxy for assets and segments
 app.get('/proxy', async (c) => {
   const url = c.req.query('url')
   const ref = c.req.query('ref')
-  const userHeaders = c.req.header;
 
-  if (!url) return c.json({ error: 'No URL provided' }, 400);
+  if (!url) return c.json({ error: 'No URL provided' }, 400)
 
   try {
-    const resp = await fetch(url, {
-      headers: { ...userHeaders, Referer: ref || '', ...corsHeaders },
-    });
+    const response = await axios.get(url, {
+      headers: { Referer: ref || '', Origin: 'https://kwik.si' },
+      responseType: 'arraybuffer',
+    })
 
-    const buffer = await resp.arrayBuffer()
-    let contentType = resp.headers.get('Content-Type') || 'text/plain';
+    const contentType = response.headers['content-type'] || 'application/octet-stream'
 
-    return c.body(buffer, 200, {
+    return c.body(response.data, 200, {
       ...corsHeaders,
-      'Content-Type': 'video/mp2t',
+      'Content-Type': contentType,
       'Cache-Control': 'public, max-age=31536000, immutable',
     })
   } catch (err) {
-    console.error('Error fetching resource:', err)
-    return c.json({ error: 'Error fetching resource', details: (err as Error).message }, 500)
+    console.error('Error in /proxy:', err)
+    return c.json({
+      error: 'Failed to fetch resource',
+      details: err instanceof Error ? err.message : String(err),
+    }, 500)
   }
 })
 
